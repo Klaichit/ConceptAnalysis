@@ -3,9 +3,10 @@ import openai
 import base64
 import json
 import re
+import csv
+import io
 from datetime import datetime
 from PIL import Image
-import io
 
 st.set_page_config(
     page_title="Isometric Asset Breakdown",
@@ -304,6 +305,33 @@ with tab_analyze:
             st.download_button("⬇️ Markdown (Artist)", data="\n".join(lines),
                                file_name=f"asset_breakdown_{ts}.md", mime="text/markdown")
 
+        # CSV export for asset breakdown
+        csv_buf2 = io.StringIO()
+        fieldnames = ["#", "Zone", "Asset", "Category", "Priority", "Complexity",
+                      "Tile Size", "Pivot", "Sorting Layer", "Order in Layer",
+                      "Collider", "Static", "Animated", "Description", "Style Notes", "Dev Notes"]
+        writer2 = csv.DictWriter(csv_buf2, fieldnames=fieldnames)
+        writer2.writeheader()
+        idx = 1
+        for zone in zones:
+            for a in zone.get("assets", []):
+                ab = a.get("artist_brief", {})
+                ds = a.get("dev_spec", {})
+                writer2.writerow({
+                    "#": idx, "Zone": zone["zone_name"], "Asset": a["name"],
+                    "Category": CATEGORY_LABELS.get(a.get("category",""), a.get("category","")),
+                    "Priority": a.get("priority",""), "Complexity": a.get("complexity",""),
+                    "Tile Size": ds.get("tile_size",""), "Pivot": ds.get("pivot",""),
+                    "Sorting Layer": ds.get("sorting_layer",""), "Order in Layer": ds.get("order_in_layer",""),
+                    "Collider": ds.get("collider_type","none"), "Static": "Yes" if ds.get("static") else "No",
+                    "Animated": "Yes" if ab.get("animated") else "No",
+                    "Description": ab.get("description",""), "Style Notes": ab.get("style_notes",""),
+                    "Dev Notes": ds.get("notes",""),
+                })
+                idx += 1
+        st.download_button("⬇️ CSV (Google Sheet) — Full Asset List", data=csv_buf2.getvalue(),
+                           file_name=f"asset_list_{ts}.csv", mime="text/csv")
+
 # ── Tab 2: Midjourney Prompts ─────────────────────────────────────────────────
 with tab_prompts:
     if "result" not in st.session_state:
@@ -344,7 +372,7 @@ with tab_prompts:
         st.divider()
         st.subheader("📤 Export Prompts")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        col_pj, col_pm = st.columns(2)
+        col_pj, col_pm, col_csv = st.columns(3)
         with col_pj:
             st.download_button("⬇️ JSON", data=json.dumps(prompts_export, indent=2, ensure_ascii=False),
                                file_name=f"mj_prompts_{ts}.json", mime="application/json")
@@ -354,3 +382,12 @@ with tab_prompts:
                 md_lines += [f"## {p['asset']} ({p['category']})", f"Zone: {p['zone']}", "```", p["prompt"], "```", ""]
             st.download_button("⬇️ Markdown", data="\n".join(md_lines),
                                file_name=f"mj_prompts_{ts}.md", mime="text/markdown")
+        with col_csv:
+            csv_buf = io.StringIO()
+            writer = csv.DictWriter(csv_buf, fieldnames=["#", "Asset", "Category", "Zone", "Prompt"])
+            writer.writeheader()
+            for i, p in enumerate(prompts_export, 1):
+                writer.writerow({"#": i, "Asset": p["asset"], "Category": p["category"],
+                                 "Zone": p["zone"], "Prompt": p["prompt"]})
+            st.download_button("⬇️ CSV (Google Sheet)", data=csv_buf.getvalue(),
+                               file_name=f"mj_prompts_{ts}.csv", mime="text/csv")
