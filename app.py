@@ -17,7 +17,7 @@ st.title("🎮 Isometric Asset Breakdown")
 st.caption("Concept Art → Unity Isometric Asset List + Midjourney Prompts")
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
+DEFAULT_MODEL = "google/gemini-2.5-flash-preview:free"
 
 ANALYSIS_PROMPT = """You are a senior Game Art Director and Unity Technical Artist specializing in isometric mobile games.
 
@@ -158,7 +158,7 @@ with st.sidebar:
     st.header("⚙️ Configuration")
     api_key = st.text_input("OpenRouter API Key", type="password", help="Get yours at openrouter.ai/keys")
     model = st.text_input("Model", value=DEFAULT_MODEL, help="Any vision-capable model on OpenRouter")
-    st.caption("Default: gemini-2.0-flash-exp (free)")
+    st.caption("Default: gemini-2.5-flash-preview (free)")
 
     st.divider()
     st.header("🎨 Midjourney Style")
