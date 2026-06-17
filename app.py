@@ -5,6 +5,7 @@ import json
 import re
 import csv
 import io
+import requests
 from datetime import datetime
 from PIL import Image
 
@@ -132,6 +133,139 @@ def analyze_image(api_key: str, model: str, uploaded_file, extra_notes: str = ""
     return json.loads(cleaned)
 
 
+def notion_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
+
+
+def notion_get_pages(token: str) -> list:
+    """Return list of pages the integration can access."""
+    r = requests.post("https://api.notion.com/v1/search",
+                      headers=notion_headers(token),
+                      json={"filter": {"value": "page", "property": "object"}, "page_size": 20})
+    if r.ok:
+        return [{"id": p["id"], "title": p.get("properties", {}).get("title", {}).get("title", [{}])[0].get("plain_text", "Untitled")}
+                for p in r.json().get("results", []) if p.get("object") == "page"]
+    return []
+
+
+def notion_create_asset_db(token: str, parent_page_id: str, scene_summary: str) -> str:
+    """Create Asset Breakdown database, return database_id."""
+    payload = {
+        "parent": {"type": "page_id", "page_id": parent_page_id},
+        "title": [{"type": "text", "text": {"content": f"🎮 Asset Breakdown — {scene_summary[:40]}"}}],
+        "properties": {
+            "Asset Name":    {"title": {}},
+            "Zone":          {"rich_text": {}},
+            "Category":      {"select": {"options": [
+                {"name": "Base Tile", "color": "brown"},
+                {"name": "Main Grid Object", "color": "orange"},
+                {"name": "Sub-grid Decoration", "color": "green"},
+                {"name": "Character", "color": "blue"},
+                {"name": "VFX", "color": "purple"},
+            ]}},
+            "Priority":      {"select": {"options": [
+                {"name": "high", "color": "red"}, {"name": "medium", "color": "yellow"}, {"name": "low", "color": "green"}
+            ]}},
+            "Complexity":    {"select": {"options": [
+                {"name": "simple", "color": "green"}, {"name": "medium", "color": "yellow"}, {"name": "complex", "color": "red"}
+            ]}},
+            "Tile Size":     {"rich_text": {}},
+            "Sorting Layer": {"rich_text": {}},
+            "Collider":      {"rich_text": {}},
+            "Static":        {"checkbox": {}},
+            "Animated":      {"checkbox": {}},
+            "Description":   {"rich_text": {}},
+            "Style Notes":   {"rich_text": {}},
+            "Dev Notes":     {"rich_text": {}},
+        }
+    }
+    r = requests.post("https://api.notion.com/v1/databases", headers=notion_headers(token), json=payload)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def notion_create_prompt_db(token: str, parent_page_id: str, scene_summary: str) -> str:
+    """Create MJ Prompts database, return database_id."""
+    payload = {
+        "parent": {"type": "page_id", "page_id": parent_page_id},
+        "title": [{"type": "text", "text": {"content": f"🖼️ MJ Prompts — {scene_summary[:40]}"}}],
+        "properties": {
+            "Asset Name": {"title": {}},
+            "Zone":       {"rich_text": {}},
+            "Category":   {"select": {"options": [
+                {"name": "Base Tile", "color": "brown"},
+                {"name": "Main Grid Object", "color": "orange"},
+                {"name": "Sub-grid Decoration", "color": "green"},
+                {"name": "Character", "color": "blue"},
+                {"name": "VFX", "color": "purple"},
+            ]}},
+            "Prompt":     {"rich_text": {}},
+            "Status":     {"select": {"options": [
+                {"name": "To Do", "color": "gray"},
+                {"name": "In Progress", "color": "yellow"},
+                {"name": "Done", "color": "green"},
+            ]}},
+        }
+    }
+    r = requests.post("https://api.notion.com/v1/databases", headers=notion_headers(token), json=payload)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def notion_add_row(token: str, db_id: str, props: dict):
+    payload = {"parent": {"database_id": db_id}, "properties": props}
+    r = requests.post("https://api.notion.com/v1/pages", headers=notion_headers(token), json=payload)
+    r.raise_for_status()
+
+
+def rt(text: str) -> dict:
+    """Shorthand: rich_text property value."""
+    return {"rich_text": [{"text": {"content": str(text)[:2000]}}]}
+
+
+def push_to_notion(token: str, parent_page_id: str, result: dict, prompts_export: list):
+    """Create both databases and fill rows."""
+    scene = result.get("scene_summary", "Scene")[:40]
+    zones = result.get("zones", [])
+
+    # Create databases
+    asset_db_id  = notion_create_asset_db(token, parent_page_id, scene)
+    prompt_db_id = notion_create_prompt_db(token, parent_page_id, scene)
+
+    # Fill Asset Breakdown
+    for zone in zones:
+        for a in zone.get("assets", []):
+            ab = a.get("artist_brief", {})
+            ds = a.get("dev_spec", {})
+            notion_add_row(token, asset_db_id, {
+                "Asset Name":    {"title": [{"text": {"content": a["name"]}}]},
+                "Zone":          rt(zone["zone_name"]),
+                "Category":      {"select": {"name": CATEGORY_LABELS.get(a.get("category",""), a.get("category",""))}},
+                "Priority":      {"select": {"name": a.get("priority", "medium")}},
+                "Complexity":    {"select": {"name": a.get("complexity", "medium")}},
+                "Tile Size":     rt(ds.get("tile_size", "")),
+                "Sorting Layer": rt(ds.get("sorting_layer", "")),
+                "Collider":      rt(ds.get("collider_type", "none")),
+                "Static":        {"checkbox": bool(ds.get("static", True))},
+                "Animated":      {"checkbox": bool(ab.get("animated", False))},
+                "Description":   rt(ab.get("description", "")),
+                "Style Notes":   rt(ab.get("style_notes", "")),
+                "Dev Notes":     rt(ds.get("notes", "")),
+            })
+
+    # Fill MJ Prompts
+    for p in prompts_export:
+        notion_add_row(token, prompt_db_id, {
+            "Asset Name": {"title": [{"text": {"content": p["asset"]}}]},
+            "Zone":       rt(p["zone"]),
+            "Category":   {"select": {"name": p["category"]}},
+            "Prompt":     rt(p["prompt"]),
+            "Status":     {"select": {"name": "To Do"}},
+        })
+
+    return asset_db_id, prompt_db_id
+
+
 def build_mj_prompt(subject: str, art_style: str, category: str, sref_url: str, seed: str, ar: str) -> str:
     iso_view = {
         "base_tile":            "isometric tile, top-down 45 degree view, seamless tileable texture, flat ground surface",
@@ -173,6 +307,14 @@ with st.sidebar:
     sref_url = st.text_input("Style Reference URL (--sref)", placeholder="https://cdn.midjourney.com/...")
     mj_seed  = st.text_input("Seed (--seed)", placeholder="e.g. 3849201")
     mj_ar    = st.selectbox("Aspect Ratio (--ar)", ["1:1", "4:3", "3:4", "16:9", "2:3"], index=0)
+
+    st.divider()
+    st.header("📓 Notion")
+    notion_token = st.text_input("Notion Integration Token", type="password",
+                                  help="notion.so/my-integrations → New integration → Copy token")
+    notion_page_id = st.text_input("Parent Page ID", placeholder="32-char page ID",
+                                    help="เปิด Notion page → Share → Copy link → เอา ID หลัง notion.so/")
+    st.caption("Share page นั้นกับ integration ก่อนนะครับ")
 
     st.divider()
     st.header("🔍 Filter")
@@ -405,6 +547,27 @@ with tab_prompts:
                 border-radius:6px;font-size:15px;cursor:pointer;font-weight:600;
             ">📊 Copy for Google Sheet</button>
         """, height=50)
+
+        # ── Save to Notion ────────────────────────────────────────────────
+        st.divider()
+        st.subheader("📓 Save to Notion")
+        if not notion_token or not notion_page_id:
+            st.info("กรอก Notion Token และ Parent Page ID ใน sidebar ก่อนครับ")
+        else:
+            if st.button("📓 Save to Notion", type="primary"):
+                with st.spinner("กำลัง push ข้อมูลเข้า Notion..."):
+                    try:
+                        clean_page_id = notion_page_id.strip().replace("-", "")
+                        asset_db, prompt_db = push_to_notion(
+                            notion_token, clean_page_id,
+                            st.session_state["result"], prompts_export
+                        )
+                        st.success("✅ บันทึกเข้า Notion สำเร็จแล้วครับ!")
+                        st.markdown(f"- 🗂️ **Asset Breakdown DB:** [เปิดใน Notion](https://notion.so/{asset_db.replace('-','')})")
+                        st.markdown(f"- 🖼️ **MJ Prompts DB:** [เปิดใน Notion](https://notion.so/{prompt_db.replace('-','')})")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+                        st.caption("ตรวจสอบว่า Share page ให้ integration แล้วหรือยังครับ")
 
         st.divider()
         st.subheader("📤 Export Files")
