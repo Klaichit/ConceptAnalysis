@@ -1,10 +1,11 @@
 import streamlit as st
-import anthropic
-import base64
+import google.generativeai as genai
 import json
 import re
 from pathlib import Path
 from datetime import datetime
+from PIL import Image
+import io
 
 st.set_page_config(
     page_title="Concept Art Asset Analyzer",
@@ -13,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("🎨 Concept Art Asset Analyzer")
-st.caption("Upload concept art → Claude Vision breaks down game assets, tags, and color palettes")
+st.caption("Upload concept art → Gemini Vision breaks down game assets, tags, and color palettes")
 
 SYSTEM_PROMPT = """You are an expert Game Art Director and Technical Artist specializing in breaking down concept art into actionable game development assets.
 
@@ -62,57 +63,26 @@ Category definitions:
 
 Be thorough — identify every distinct asset visible. For colors, extract the actual colors visible in the art (not generic descriptions). Return ONLY valid JSON, no markdown code blocks."""
 
-def encode_image(uploaded_file) -> tuple[str, str]:
-    """Return (base64_data, media_type)."""
-    data = uploaded_file.read()
-    ext = Path(uploaded_file.name).suffix.lower()
-    media_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }
-    media_type = media_map.get(ext, "image/jpeg")
-    return base64.standard_b64encode(data).decode("utf-8"), media_type
+def analyze_image(api_key: str, uploaded_file, extra_notes: str = "") -> dict:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
 
-def analyze_image(api_key: str, image_b64: str, media_type: str, extra_notes: str = "") -> dict:
-    client = anthropic.Anthropic(api_key=api_key)
+    image = Image.open(uploaded_file)
 
-    user_content = [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": image_b64,
-            },
-        },
-        {
-            "type": "text",
-            "text": f"Analyze this concept art and return the full asset breakdown as JSON.{(' Additional context: ' + extra_notes) if extra_notes else ''}",
-        },
-    ]
+    prompt = SYSTEM_PROMPT
+    if extra_notes:
+        prompt += f"\n\nAdditional context: {extra_notes}"
+    prompt += "\n\nAnalyze this concept art and return the full asset breakdown as JSON."
 
-    with st.spinner("Claude is analyzing the concept art..."):
-        full_text = ""
-        with client.messages.stream(
-            model="claude-opus-4-8",
-            max_tokens=8000,
-            thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_content}],
-        ) as stream:
-            for text in stream.text_stream:
-                full_text += text
+    with st.spinner("Gemini is analyzing the concept art..."):
+        response = model.generate_content([prompt, image])
 
-    # Strip markdown code fences if present
+    full_text = response.text
     cleaned = re.sub(r"^```(?:json)?\s*", "", full_text.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
     return json.loads(cleaned)
 
 def hex_swatch(hex_color: str, size: int = 24) -> str:
-    """Return an HTML color swatch span."""
     safe = hex_color if hex_color.startswith("#") else f"#{hex_color}"
     return f'<span style="display:inline-block;width:{size}px;height:{size}px;background:{safe};border:1px solid #555;border-radius:3px;vertical-align:middle;margin-right:6px;"></span>'
 
@@ -129,7 +99,12 @@ PRIORITY_COLORS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Configuration")
-    api_key = st.text_input("Anthropic API Key", type="password", help="Get yours at console.anthropic.com")
+    api_key = st.text_input(
+        "Google Gemini API Key",
+        type="password",
+        help="Get yours free at aistudio.google.com/apikey"
+    )
+    st.caption("Free tier: 15 requests/min, 1,500/day")
     st.divider()
     st.subheader("Filter Results")
     filter_categories = st.multiselect(
@@ -138,15 +113,18 @@ with st.sidebar:
         default=["character", "prop", "environment", "ui_element", "vfx"],
     )
     st.divider()
-    st.caption("Model: claude-opus-4-8 + adaptive thinking")
+    st.caption("Model: gemini-2.0-flash (free)")
 
 # ── Main Area ─────────────────────────────────────────────────────────────────
 uploaded = st.file_uploader(
     "Drop your concept art here",
-    type=["png", "jpg", "jpeg", "webp", "gif"],
+    type=["png", "jpg", "jpeg", "webp"],
     label_visibility="collapsed",
 )
-extra_notes = st.text_input("Optional context (game genre, art style direction, etc.)", placeholder="e.g. Fantasy RPG, stylized low-poly")
+extra_notes = st.text_input(
+    "Optional context (game genre, art style direction, etc.)",
+    placeholder="e.g. Fantasy RPG, stylized low-poly"
+)
 
 if uploaded:
     col_img, col_info = st.columns([1, 1])
@@ -159,19 +137,15 @@ if uploaded:
     analyze_btn = st.button("🔍 Analyze Assets", type="primary", disabled=not api_key)
 
     if not api_key:
-        st.warning("Enter your Anthropic API key in the sidebar.")
+        st.warning("Enter your Gemini API key in the sidebar. Get it free at aistudio.google.com/apikey")
 
     if analyze_btn and api_key:
         uploaded.seek(0)
-        image_b64, media_type = encode_image(uploaded)
-
         try:
-            result = analyze_image(api_key, image_b64, media_type, extra_notes)
+            result = analyze_image(api_key, uploaded, extra_notes)
             st.session_state["result"] = result
         except json.JSONDecodeError as e:
-            st.error(f"Failed to parse Claude's response as JSON: {e}")
-        except anthropic.AuthenticationError:
-            st.error("Invalid API key.")
+            st.error(f"Failed to parse Gemini's response as JSON: {e}")
         except Exception as e:
             st.error(f"Error: {e}")
 
@@ -182,7 +156,6 @@ if "result" in st.session_state:
 
     st.divider()
 
-    # Summary row
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Assets", len(result.get("assets", [])))
     col2.metric("Filtered", len(assets))
@@ -192,7 +165,6 @@ if "result" in st.session_state:
     st.subheader("Summary")
     st.info(result.get("summary", ""))
 
-    # Global Palette
     if result.get("global_palette"):
         st.subheader("🎨 Global Color Palette")
         cols = st.columns(min(len(result["global_palette"]), 8))
@@ -205,10 +177,8 @@ if "result" in st.session_state:
                 )
                 st.caption(f"**{color['name']}**  \n`{color['hex']}`  \n_{color.get('role','')}_")
 
-    # Asset breakdown
     st.subheader("📦 Asset Breakdown")
 
-    # Category tabs
     tab_all, tab_char, tab_prop, tab_env, tab_ui, tab_vfx = st.tabs(
         ["All", "Characters", "Props", "Environment", "UI", "VFX"]
     )
@@ -252,14 +222,12 @@ if "result" in st.session_state:
         with tab:
             render_asset_cards([a for a in assets if a.get("category") == cat])
 
-    # Recommended pipeline
     pipeline = result.get("recommended_pipeline", [])
     if pipeline:
         st.subheader("🔧 Recommended Production Pipeline")
         for i, step in enumerate(pipeline, 1):
             st.write(f"{i}. {step}")
 
-    # Export
     st.divider()
     st.subheader("📤 Export")
     col_json, col_md = st.columns(2)
