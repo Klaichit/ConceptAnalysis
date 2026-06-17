@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-pip install -r requirements.txt --quiet
-streamlit run app.py
+python -m pip install -r requirements.txt --quiet
+python -m streamlit run app.py
