@@ -370,7 +370,44 @@ with tab_prompts:
                 st.markdown("")
 
         st.divider()
-        st.subheader("📤 Export Prompts")
+
+        # ── Copy All Prompts ──────────────────────────────────────────────
+        all_prompts_text = "\n\n".join(
+            f"[{i+1}] {p['asset']} ({p['category']}) — {p['zone']}\n{p['prompt']}"
+            for i, p in enumerate(prompts_export)
+        )
+        st.subheader("📋 Copy All Prompts")
+        st.text_area("Select All → Copy", value=all_prompts_text, height=200, label_visibility="collapsed")
+        st.components.v1.html(f"""
+            <button onclick="navigator.clipboard.writeText({json.dumps(all_prompts_text)}).then(()=>{{
+                this.innerText='✅ Copied!';
+                setTimeout(()=>this.innerText='📋 Copy All Prompts',2000);
+            }})" style="
+                background:#FF4B4B;color:white;border:none;padding:10px 24px;
+                border-radius:6px;font-size:15px;cursor:pointer;font-weight:600;
+            ">📋 Copy All Prompts</button>
+        """, height=50)
+
+        # ── Google Sheet TSV ──────────────────────────────────────────────
+        tsv_lines = ["#\tAsset\tCategory\tZone\tPrompt"]
+        for i, p in enumerate(prompts_export, 1):
+            tsv_lines.append(f"{i}\t{p['asset']}\t{p['category']}\t{p['zone']}\t{p['prompt']}")
+        tsv_text = "\n".join(tsv_lines)
+        st.subheader("📊 Copy for Google Sheet (TSV)")
+        st.caption("Copy แล้ว Paste ลง Google Sheet ได้เลย — ข้อมูลจะแยก column อัตโนมัติ")
+        st.text_area("TSV", value=tsv_text, height=150, label_visibility="collapsed")
+        st.components.v1.html(f"""
+            <button onclick="navigator.clipboard.writeText({json.dumps(tsv_text)}).then(()=>{{
+                this.innerText='✅ Copied!';
+                setTimeout(()=>this.innerText='📊 Copy for Google Sheet',2000);
+            }})" style="
+                background:#0F9D58;color:white;border:none;padding:10px 24px;
+                border-radius:6px;font-size:15px;cursor:pointer;font-weight:600;
+            ">📊 Copy for Google Sheet</button>
+        """, height=50)
+
+        st.divider()
+        st.subheader("📤 Export Files")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         col_pj, col_pm, col_csv = st.columns(3)
         with col_pj:
